@@ -69,17 +69,21 @@ def main():
 
     # Enable Training for T3
     tts_engine_new.t3.train()
-    for param in tts_engine_new.t3.parameters(): param.requires_grad = True
+    for param in tts_engine_new.t3.parameters(): 
+        param.requires_grad = True
 
-    logger.info("Initializing Preprocess dataset...")
-    
     if cfg.preprocess:
+        
+        logger.info("Initializing Preprocess dataset...")
         
         if cfg.ljspeech:
             preprocess_dataset_ljspeech(cfg, tts_engine_new)
             
         else:
             preprocess_dataset_file_based(cfg, tts_engine_new)
+            
+    else:
+        logger.info("Skipping the preprocessing dataset step...")
             
         
     # 5. DATASET & WRAPPER
