@@ -90,7 +90,7 @@ scoop install ffmpeg
 ```bash
 
 git clone https://github.com/gokhaneraslan/chatterbox-finetuning.git
-cd chatterbox-finetuning-basic
+cd chatterbox-finetuning
 
 pip install -r requirements.txt
 ```
