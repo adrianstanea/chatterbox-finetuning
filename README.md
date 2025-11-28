@@ -4,6 +4,7 @@ A modular infrastructure for **fine-tuning** the Chatterbox TTS model (specifica
 
 Specially designed to support **new languages** (like Turkish) that aren't fully supported by the original model by building a custom tokenizer structure and expanding the model's vocabulary.
 
+
 ---
 
 ## ⚠️ CRITICAL INFORMATION (Please Read)
