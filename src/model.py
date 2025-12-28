@@ -139,7 +139,9 @@ class ChatterboxTrainerWrapper(torch.nn.Module):
         
         curr_speech_len = speech_labels.size(1)
         mask_speech_pad = torch.arange(curr_speech_len, device=device)[None, :] >= (speech_token_lens[:, None] - 1)
-        mask_prompt = torch.arange(curr_speech_len, device=device)[None, :] < self.prompt_token_len
+
+        actual_prompt_len = prompt_tokens.size(1) 
+        mask_prompt = torch.arange(curr_speech_len, device=device)[None, :] < actual_prompt_len
         
         speech_labels = speech_labels.masked_fill(mask_speech_pad | mask_prompt, IGNORE_ID)
         loss_speech = F.cross_entropy(speech_logits, speech_labels, ignore_index=IGNORE_ID)
