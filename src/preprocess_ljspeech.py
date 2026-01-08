@@ -4,9 +4,10 @@ import torchaudio
 import pandas as pd
 from tqdm import tqdm
 from src.chatterbox_.tts import ChatterboxTTS, punc_norm
+from src.chatterbox_.tts_turbo import ChatterboxTurboTTS
 from src.chatterbox_.models.s3tokenizer import S3_SR
 from src.utils import setup_logger
-
+from src.config import TrainConfig
 
 
 logger = setup_logger(__name__)
@@ -106,3 +107,19 @@ def preprocess_dataset_ljspeech(config, tts_engine: ChatterboxTTS):
             continue
         
     logger.info(f"Preprocessing completed! Success: {success_count}/{len(data)}")
+    
+    
+
+if __name__ == "__main__":
+
+    cfg = TrainConfig()
+    
+    if cfg.is_turbo:
+        EngineClass = ChatterboxTurboTTS
+    else:
+        EngineClass = ChatterboxTTS
+    
+    logger.info(f"{EngineClass} engine starting...")
+    tts_engine = EngineClass.from_local(cfg.model_dir, device="cpu")
+    
+    preprocess_dataset_ljspeech(cfg, tts_engine)
