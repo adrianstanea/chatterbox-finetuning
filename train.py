@@ -148,6 +148,8 @@ def main():
         bf16=True,
         save_total_limit=cfg.save_total_limit,
         gradient_checkpointing=True, # This setting theoretically reduces VRAM usage by 60%.
+        dataloader_persistent_workers=True,
+        dataloader_pin_memory=True,
     )
 
     trainer = Trainer(
