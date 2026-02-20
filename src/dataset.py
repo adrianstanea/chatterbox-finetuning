@@ -1,4 +1,5 @@
 import os
+import random
 import torch
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
@@ -56,11 +57,19 @@ class ChatterboxDataset(Dataset):
             if speech_tokens.size(0) > self.cfg.max_speech_len:
                 speech_tokens = speech_tokens[:self.cfg.max_speech_len]
 
+            speaker_emb = data["speaker_emb"]
+            prompt_tokens = data["prompt_tokens"]
+
+            if random.random() < 0.20:
+                speaker_emb = torch.zeros_like(speaker_emb)
+                prompt_tokens = torch.zeros(1, dtype=torch.long)
+
+
             return {
                 "text_tokens": text_tokens,
                 "speech_tokens": speech_tokens,
-                "speaker_emb": data["speaker_emb"],
-                "prompt_tokens": data["prompt_tokens"]
+                "speaker_emb": speaker_emb,
+                "prompt_tokens": prompt_tokens
             }
 
 
@@ -69,7 +78,7 @@ class ChatterboxDataset(Dataset):
             return None
 
 
-def data_collator(batch):
+def data_collator_standart(batch):
 
     batch = [item for item in batch if item is not None]
     if not batch: 
@@ -94,4 +103,38 @@ def data_collator(batch):
         "speech_token_lens": speech_lens,
         "speaker_emb": speaker_embs,
         "prompt_tokens": prompt_tokens
+    }
+    
+    
+
+
+def data_collator_turbo(batch):
+
+    batch = [item for item in batch if item is not None]
+    if not batch: 
+        return {}
+
+    # 1. Text Tokens Padding
+    text_tokens = pad_sequence([x["text_tokens"] for x in batch], batch_first=True, padding_value=0)
+    text_lens = torch.tensor([len(x["text_tokens"]) for x in batch], dtype=torch.long)
+
+    # 2. Speech Tokens Padding
+    speech_tokens = pad_sequence([x["speech_tokens"] for x in batch], batch_first=True, padding_value=0)
+    speech_lens = torch.tensor([len(x["speech_tokens"]) for x in batch], dtype=torch.long)
+
+    # 3. Prompt Tokens Padding
+    prompt_tokens = pad_sequence([x["prompt_tokens"] for x in batch], batch_first=True, padding_value=0)
+    prompt_lens = torch.tensor([x["prompt_tokens"].shape[0] for x in batch], dtype=torch.long)
+
+    # 4. Speaker Embedding
+    speaker_embs = torch.stack([x["speaker_emb"] for x in batch])
+
+    return {
+        "text_tokens": text_tokens,
+        "text_token_lens": text_lens,
+        "speech_tokens": speech_tokens,
+        "speech_token_lens": speech_lens,
+        "speaker_emb": speaker_embs,
+        "prompt_tokens": prompt_tokens,
+        "prompt_lens": prompt_lens
     }

@@ -111,7 +111,8 @@ class ChatterboxTrainerWrapper(torch.nn.Module):
             speech_tokens, 
             speech_token_lens,
             speaker_emb, 
-            prompt_tokens):
+            prompt_tokens,
+            prompt_lens=None):
 
         device = text_tokens.device
         batch_size = text_tokens.size(0)
@@ -138,23 +139,20 @@ class ChatterboxTrainerWrapper(torch.nn.Module):
 
         speech_logits = out.speech_logits[:, :-1, :].transpose(1, 2)
         speech_labels = speech_tokens[:, 1:] 
-        
+   
         curr_speech_len = speech_labels.size(1)
         mask_speech_pad = torch.arange(curr_speech_len, device=device)[None, :] >= (speech_token_lens[:, None] - 1)
 
-        if self.cfg.is_turbo == True:
-            speech_labels = speech_labels.masked_fill(mask_speech_pad, IGNORE_ID)
-            
+
+        if prompt_lens is not None:
+            mask_prompt = torch.arange(curr_speech_len, device=device)[None, :] < prompt_lens[:, None]
         else:
-            
-            #mask_prompt = torch.arange(curr_speech_len, device=device)[None, :] < self.prompt_token_len
-            
-            actual_prompt_len = prompt_tokens.size(1)
-            mask_prompt = torch.arange(curr_speech_len, device=device)[None, :] < actual_prompt_len
-            
-            speech_labels = speech_labels.masked_fill(mask_speech_pad | mask_prompt, IGNORE_ID)
-            
-            
+            logger.info("Prompt lens not provided, using fixed width!")
+            mask_prompt = torch.arange(curr_speech_len, device=device)[None, :] < prompt_tokens.size(1)
+
+
+        speech_labels = speech_labels.masked_fill(mask_speech_pad | mask_prompt, IGNORE_ID)
+
         loss_speech = F.cross_entropy(speech_logits, speech_labels, ignore_index=IGNORE_ID)
 
 

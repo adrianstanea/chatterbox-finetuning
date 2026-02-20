@@ -5,7 +5,7 @@ from transformers import Trainer, TrainingArguments
 from safetensors.torch import save_file
 
 from src.config import TrainConfig
-from src.dataset import ChatterboxDataset, data_collator
+from src.dataset import ChatterboxDataset, data_collator_turbo, data_collator_standart
 from src.model import resize_and_load_t3_weights, ChatterboxTrainerWrapper
 from src.preprocess_ljspeech import preprocess_dataset_ljspeech
 from src.preprocess_file_based import preprocess_dataset_file_based
@@ -131,6 +131,15 @@ def main():
     
     model_wrapper = ChatterboxTrainerWrapper(tts_engine_new.t3)
 
+
+    if cfg.is_turbo:
+        logger.info("Using Turbo Data Collator (with dynamic prompt masking)")
+        selected_collator = data_collator_turbo
+    else:
+        logger.info("Using Standard Data Collator")
+        selected_collator = data_collator_standart
+
+
     # 7. TRAINING ARGUMENTS
     training_args = TrainingArguments(
         output_dir=cfg.output_dir,
@@ -148,13 +157,15 @@ def main():
         bf16=True,
         save_total_limit=cfg.save_total_limit,
         gradient_checkpointing=True, # This setting theoretically reduces VRAM usage by 60%.
+        dataloader_persistent_workers=True,
+        dataloader_pin_memory=True,
     )
 
     trainer = Trainer(
         model=model_wrapper,
         args=training_args,
         train_dataset=train_ds,
-        data_collator=data_collator,
+        data_collator=selected_collator,
         callbacks=trainer_callbacks
     )
 
