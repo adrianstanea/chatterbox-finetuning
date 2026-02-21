@@ -205,3 +205,7 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+# Training outputs and pretrained models
+chatterbox_output/
+pretrained_models/
+*.backup_*.py
