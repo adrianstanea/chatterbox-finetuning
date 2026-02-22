@@ -94,7 +94,10 @@ class ChatterboxTrainerWrapper(torch.nn.Module):
         if hasattr(t3_model.hp, 'speech_cond_prompt_len'):
             self.prompt_token_len = t3_model.hp.speech_cond_prompt_len
         else:
-            self.prompt_token_len = 150 
+            self.prompt_token_len = 150
+        
+        # Flag to log prompt lens warning only once
+        self._logged_prompt_lens_warning = False 
 
 
     def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
@@ -147,7 +150,11 @@ class ChatterboxTrainerWrapper(torch.nn.Module):
         if prompt_lens is not None:
             mask_prompt = torch.arange(curr_speech_len, device=device)[None, :] < prompt_lens[:, None]
         else:
-            logger.info("Prompt lens not provided, using fixed width!")
+            if not self._logged_prompt_lens_warning:
+                # Only log on main process in distributed training
+                if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                    logger.info("Prompt lens not provided, using fixed width!")
+                self._logged_prompt_lens_warning = True
             mask_prompt = torch.arange(curr_speech_len, device=device)[None, :] < prompt_tokens.size(1)
 
 

@@ -12,6 +12,7 @@ from src.config import TrainConfig
 from src.chatterbox_.tts import ChatterboxTTS
 from src.chatterbox_.tts_turbo import ChatterboxTurboTTS
 from src.chatterbox_.models.t3.t3 import T3
+from src.romanian_preprocessor import preprocess_and_normalize as ro_preprocess
 
 
 logger = setup_logger("Chatterbox-Inference")
@@ -26,7 +27,7 @@ OUTPUT_DIR = cfg.output_dir
 
 
 if IS_TURBO:
-    
+
     FINETUNED_WEIGHTS = os.path.join(OUTPUT_DIR, "t3_turbo_finetuned.safetensors")
     PARAMS = {
         "temperature": 0.8,
@@ -34,7 +35,7 @@ if IS_TURBO:
         "repetition_penalty": 1.2,
     }
 else:
-    
+
     FINETUNED_WEIGHTS = os.path.join(OUTPUT_DIR, "t3_finetuned.safetensors")
     PARAMS = {
         "temperature": 0.8,
@@ -44,7 +45,7 @@ else:
     }
 
 
-TEXT_TO_SAY = "Bu, artık hem normal hem de turbo modelleri otomatik olarak destekleyen yeni çıkarım komut dosyasının bir testidir."
+TEXT_TO_SAY = "De asemenea, contează și dacă imobilul este la stradă sau nu."
 AUDIO_PROMPT = "./reference.wav"
 OUTPUT_FILE = "./output.wav"
 
@@ -55,26 +56,26 @@ def load_finetuned_engine(device):
     Loads the correct Chatterbox engine (Normal or Turbo) and replaces the T3 module
     with the fine-tuned version.
     """
-    
+
     logger.info(f"Loading in {'TURBO' if IS_TURBO else 'NORMAL'} mode.")
     logger.info(f"Loading base model from: {BASE_MODEL_DIR}")
 
     EngineClass = ChatterboxTurboTTS if IS_TURBO else ChatterboxTTS
 
     tts_engine = EngineClass.from_local(BASE_MODEL_DIR, device="cpu")
-    
+
     # Configure New T3 Model
     logger.info(f"Initializing new T3 with vocab size: {cfg.new_vocab_size}")
     t3_config = tts_engine.t3.hp
     t3_config.text_tokens_dict_size = cfg.new_vocab_size
-  
+
     new_t3 = T3(hp=t3_config)
 
     if IS_TURBO:
         logger.info("Turbo Mode: Removing 'wte' layer from new T3 model to match fine-tuned state.")
         if hasattr(new_t3.tfmr, "wte"):
             del new_t3.tfmr.wte
-    
+
     if os.path.exists(FINETUNED_WEIGHTS):
         logger.info(f"Loading fine-tuned weights: {FINETUNED_WEIGHTS}")
         state_dict = load_file(FINETUNED_WEIGHTS, device="cpu")
@@ -86,13 +87,13 @@ def load_finetuned_engine(device):
         raise FileNotFoundError(FINETUNED_WEIGHTS)
 
     tts_engine.t3 = new_t3
-    
+
     tts_engine.t3.to(device).eval()
     tts_engine.s3gen.to(device).eval()
     tts_engine.ve.to(device).eval()
 
     tts_engine.device = device
-    
+
     return tts_engine
 
 
@@ -117,27 +118,37 @@ def set_seed(seed):
 
 
 def main():
-    
-    
+
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"Inference running on: {device}")
-    
+
     engine = load_finetuned_engine(device)
-    
-    sentences = re.split(r'(?<=[.?!])\s+', TEXT_TO_SAY.strip())
+
+    # Apply Romanian preprocessing if enabled
+    text_to_say = TEXT_TO_SAY
+    if cfg.romanian_preprocessing:
+        text_to_say = ro_preprocess(
+            TEXT_TO_SAY,
+            lowercase=True,
+            mode=getattr(cfg, 'romanian_mode', 'phoneme'),
+        )
+        logger.info(f"Romanian preprocessing applied: '{TEXT_TO_SAY}' → '{text_to_say}'")
+
+    sentences = re.split(r'(?<=[.?!])\s+', text_to_say.strip())
     sentences = [s for s in sentences if s.strip()]
-    
+
     logger.info(f"Found {len(sentences)} sentences to synthesize.")
-    
+
     all_chunks = []
     sample_rate = 24000
-    
+
     set_seed(42)
-    
+
     for i, sent in enumerate(sentences):
         logger.info(f"Synthesizing ({i+1}/{len(sentences)}): {sent}")
         sr, audio_chunk = generate_sentence_audio(engine, sent, AUDIO_PROMPT, **PARAMS)
-        
+
         if len(audio_chunk) > 0:
             all_chunks.append(audio_chunk)
             sample_rate = sr

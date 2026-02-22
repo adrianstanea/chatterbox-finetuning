@@ -1,7 +1,8 @@
 import os
 import sys
 import torch
-from transformers import Trainer, TrainingArguments
+import numpy as np
+from transformers import Trainer, TrainingArguments, TrainerCallback
 from safetensors.torch import save_file
 
 from src.config import TrainConfig
@@ -20,13 +21,51 @@ from src.chatterbox_.models.t3.t3 import T3
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+# PyTorch 2.6+ defaults torch.load to weights_only=True, which blocks numpy
+# globals in RNG state checkpoint files. Allowlist them so checkpoint resume works.
+torch.serialization.add_safe_globals([
+    np.core.multiarray._reconstruct,
+    np.ndarray,
+    np.dtype,
+    np.dtypes.Float64DType,
+    np.dtypes.UInt32DType,
+])
+
 logger = setup_logger("ChatterboxFinetune")
 
 
+class CacheClearCallback(TrainerCallback):
+    """Clear CUDA cache periodically to prevent memory fragmentation."""
+
+    def __init__(self, clear_every_n_steps=50):
+        self.clear_every_n_steps = clear_every_n_steps
+        self.last_clear_step = 0
+
+    def on_step_end(self, args, state, control, **kwargs):
+        """Clear cache every N steps."""
+        if state.global_step - self.last_clear_step >= self.clear_every_n_steps:
+            torch.cuda.empty_cache()
+            self.last_clear_step = state.global_step
+            logger.debug(f"Cleared CUDA cache at step {state.global_step}")
+        return control
+
+    def on_save(self, args, state, control, **kwargs):
+        """Clear cache after saving checkpoint."""
+        torch.cuda.empty_cache()
+        logger.debug(f"Cleared CUDA cache after checkpoint save at step {state.global_step}")
+        return control
+
+    def on_epoch_end(self, args, state, control, **kwargs):
+        """Clear cache at end of each epoch."""
+        torch.cuda.empty_cache()
+        logger.debug(f"Cleared CUDA cache at end of epoch {state.epoch}")
+        return control
+
+
 def main():
-    
+
     cfg = TrainConfig()
-    
+
     logger.info("--- Starting Chatterbox Finetuning ---")
     logger.info(f"Mode: {'CHATTERBOX-TURBO' if cfg.is_turbo else 'CHATTERBOX-TTS'}")
 
@@ -34,15 +73,15 @@ def main():
     mode_check = "chatterbox_turbo" if cfg.is_turbo else "chatterbox"
     if not check_pretrained_models(mode=mode_check):
         sys.exit(1)
-    
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+
     # 1. SELECT THE CORRECT ENGINE CLASS
     if cfg.is_turbo:
         EngineClass = ChatterboxTurboTTS
     else:
         EngineClass = ChatterboxTTS
-    
+
     logger.info(f"Device: {device}")
     logger.info(f"Model Directory: {cfg.model_dir}")
 
@@ -56,7 +95,7 @@ def main():
 
     # 3. CREATE NEW T3 MODEL WITH NEW VOCAB SIZE
     logger.info(f"Creating new T3 model with vocab size: {cfg.new_vocab_size}")
-    
+
     new_t3_config = original_t3_config
     new_t3_config.text_tokens_dict_size = cfg.new_vocab_size
 
@@ -87,48 +126,53 @@ def main():
     # 5. PREPARE ENGINE FOR TRAINING
     # Reload engine components (VoiceEncoder, S3Gen) but inject our new T3
     tts_engine_new = EngineClass.from_local(cfg.model_dir, device="cpu")
-    tts_engine_new.t3 = new_t3_model 
+    tts_engine_new.t3 = new_t3_model
 
     # Freeze other components
     logger.info("Freezing S3Gen and VoiceEncoder...")
-    for param in tts_engine_new.ve.parameters(): 
+    for param in tts_engine_new.ve.parameters():
         param.requires_grad = False
-        
-    for param in tts_engine_new.s3gen.parameters(): 
+
+    for param in tts_engine_new.s3gen.parameters():
         param.requires_grad = False
 
     # Enable Training for T3
     tts_engine_new.t3.train()
-    for param in tts_engine_new.t3.parameters(): 
+    for param in tts_engine_new.t3.parameters():
         param.requires_grad = True
 
     if cfg.preprocess:
-        
+
         logger.info("Initializing Preprocess dataset...")
-        
+
         if cfg.ljspeech:
             preprocess_dataset_ljspeech(cfg, tts_engine_new)
-            
+
         elif cfg.json_format:
             preprocess_dataset_json_based(cfg, tts_engine_new)
-            
+
         else:
             preprocess_dataset_file_based(cfg, tts_engine_new)
-      
+
     else:
         logger.info("Skipping the preprocessing dataset step...")
-            
-        
+
+
     # 6. DATASET & WRAPPER
     logger.info("Initializing Dataset...")
     train_ds = ChatterboxDataset(cfg)
-    
-    
+
+
     trainer_callbacks = []
+
+    # Add cache clearing callback to prevent memory fragmentation
+    cache_clear_cb = CacheClearCallback(clear_every_n_steps=50)
+    trainer_callbacks.append(cache_clear_cb)
+
     if cfg.is_inference:
         inference_cb = InferenceCallback(cfg)
         trainer_callbacks.append(inference_cb)
-    
+
     model_wrapper = ChatterboxTrainerWrapper(tts_engine_new.t3)
 
 
@@ -151,12 +195,12 @@ def main():
         save_steps=cfg.save_steps,
         logging_strategy="epoch",
         remove_unused_columns=False, # Required for our custom wrapper
-        dataloader_num_workers=cfg.dataloader_num_workers,    
+        dataloader_num_workers=cfg.dataloader_num_workers,
         report_to=["tensorboard"],
         fp16=False,
         bf16=True,
         save_total_limit=cfg.save_total_limit,
-        gradient_checkpointing=True, # This setting theoretically reduces VRAM usage by 60%.
+        gradient_checkpointing=False,  # Must be False for multi-GPU DDP (causes parameter double-marking)
         dataloader_persistent_workers=True,
         dataloader_pin_memory=True,
     )
@@ -169,14 +213,31 @@ def main():
         callbacks=trainer_callbacks
     )
 
+    # Auto-detect and resume from latest checkpoint
+    checkpoint_dir = None
+    if os.path.exists(cfg.output_dir):
+        checkpoints = [
+            os.path.join(cfg.output_dir, d) 
+            for d in os.listdir(cfg.output_dir) 
+            if d.startswith('checkpoint-') and os.path.isdir(os.path.join(cfg.output_dir, d))
+        ]
+        if checkpoints:
+            # Sort by checkpoint number to get the latest one
+            checkpoints.sort(key=lambda x: int(x.split('-')[-1]))
+            checkpoint_dir = checkpoints[-1]
+            logger.info(f"Found existing checkpoint: {checkpoint_dir}")
+            logger.info("Resuming training from checkpoint...")
+        else:
+            logger.info("No existing checkpoints found. Starting from scratch.")
+    
     logger.info("Starting Training Loop...")
-    trainer.train()
+    trainer.train(resume_from_checkpoint=checkpoint_dir)
 
 
     # 8. SAVE FINAL MODEL
     logger.info("Training complete. Saving model...")
     os.makedirs(cfg.output_dir, exist_ok=True)
-    
+
     filename = "t3_turbo_finetuned.safetensors" if cfg.is_turbo else "t3_finetuned.safetensors"
     final_model_path = os.path.join(cfg.output_dir, filename)
 
@@ -184,5 +245,5 @@ def main():
     logger.info(f"Model saved to: {final_model_path}")
 
 
-if __name__ == "__main__": 
+if __name__ == "__main__":
     main()
