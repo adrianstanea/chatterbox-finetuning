@@ -153,15 +153,15 @@ class AlignmentStreamAnalyzer:
             
         # Check for excessive token repetition (3x same token in a row)
         token_repetition = (
-            # self.complete and 
+            # self.complete and
             len(self.generated_tokens) >= 3 and
-            len(set(self.generated_tokens[-2:])) == 1
+            len(set(self.generated_tokens[-3:])) == 1
         )
-        
+
         if token_repetition:
             repeated_token = self.generated_tokens[-1]
-            logger.warning(f"🚨 Detected 2x repetition of token {repeated_token}")
-            
+            logger.warning(f"🚨 Detected 3x repetition of token {repeated_token}")
+
         # Suppress EoS to prevent early termination
         if cur_text_posn < S - 3 and S > 5:  # Only suppress if text is longer than 5 tokens
             logits[..., self.eos_idx] = -2**15
